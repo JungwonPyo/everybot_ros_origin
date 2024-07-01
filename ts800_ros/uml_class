@@ -1,0 +1,452 @@
+
+
+
+abstract class service{
+
+    -E_SERVICE_STATUS svcstatus;
+    -E_SERVICE_ID id;
+    -int starttick;
+
+    +service();
+    +~service();
+    +virtual void serviceStartup() = 0;    
+    +virtual void serviceRunning() = 0;
+    +virtual void servicePause() = 0;
+    +virtual void serviceCompleted() = 0;
+    
+    +void serviceControl(E_SERVICE_CTR ctr);
+    +void setServiceStatus ( E_SERVICE_STATUS status );
+    +E_SERVICE_STATUS getServiceStatus ();
+        
+    +void serviceRun();    
+    +void initializeSvc(E_SERVICE_ID set);
+    +E_SERVICE_ID getServiceId();
+
+    +int getStartTick();
+    +void setStartTick(int set);
+}
+
+
+class CServiceIdle
+{
+    ===참조==    
+    CServiceData *pServiceData;
+    CSupplyWater   *pSupplyWater;   
+    CLocation  *pLocation;
+    
+    --생성자 매개변수--    
+    CSupplyWater* _pSupplyWater
+    CLocation* _pLocation
+}
+
+class CServiceCharging{
+    ===참조==
+    -CServiceData *pServiceData;
+    ===생성자==
+    +CServiceCharging(CServiceData* _pServiceData);
+    +~CServiceCharging();  
+}
+
+class CServiceClean
+{
+    ===참조==
+    -CObstaclemap *pObsMap;    
+    -CWalltracking *pWalltracking;
+    -CServiceData *pServiceData;
+    ===생성==
+    -CLineClean *pLineClean;
+    ===생성자==
+    +CServiceClean(CObstaclemap* _pObsMap,
+    CServiceData* _pServiceData);
+    +~CServiceClean();      
+}
+
+
+class CServiceDocking
+{
+    ===참조==
+    -CServiceData *pServiceData;
+    -CSignaltracking *pSignaltracking;
+    ===생성==
+    -CDocking *pDocking;
+    ===생성자==
+    +CServiceDocking(CServiceData* _pServiceData);    
+    +~CServiceDocking();    
+}
+
+class CServiceExplorer
+{
+    ===참조==
+    CServiceData *pServiceData;
+    ===생성==
+    CExplorer *pExplorer;
+    ===생성자==
+    +CServiceExplorer(CServiceData* _pServiceData);    
+    +~CServiceExplorer();
+}
+
+class CServiceUnDocking
+{
+    ===참조==
+    -CServiceData *pServiceData;
+    ===생성==
+    -CUnDocking *pUnDocking;
+    ===생성자==
+    +CServiceUnDocking(CCoreData* _pCore);
+}
+
+class CRsuContext
+{
+    ===참조==
+    -service* pService;
+    --생성자--
+    +CRsuContext(service* _service);
+    +~CRsuContext();
+    ----
+    +void setService(service* _service);
+    +void serviceRun();
+    +void serviceControl(E_SERVICE_CTR ctr);
+    +E_SERVICE_STATUS getServiceStatus();
+    +E_SERVICE_ID getServiceId();    
+    +int  getServiceTime ( void );    
+}
+
+class CExplorer
+{
+    ===참조==
+    CServiceData        *pServiceData;
+
+    ===생성자==
+    -CExplorer(CServiceData* _pServiceData);
+    -~CExplorer();    
+}
+
+class CDocking
+{
+    ===참조==
+    -CServiceData    *pServiceData;
+    -CSignaltracking *pSignaltracking;
+    
+    ===생성==
+    
+    --생성자 매개변수--
+    CSignaltracking* _pSignaltracking   
+}
+
+abstract class CObserver{  
+    --생성자--
+    CObserver();    
+    --virtual--
+    void update(CExternData* pExternData);
+}
+
+class CServiceData{
+    ===생성==
+    +CObstacle           obstacle;
+    +CObstaclemap        obstaclemap;
+    +CLocalizData        localiz;
+    +CSignal             signal;
+    +CRobotMap            robotMap;
+    +CRosPublishData     rosPublishData;
+    +CDebugData          *pDebugData;
+    +CMapStorage         mapStorage;
+    +CBatteryState battery;
+    +CKeyState key;
+    +CPowerState power;
+    +CTiltingState tilting;
+
+    --생성자--
+    +CServiceData(ros::NodeHandle _nh);    
+}
+
+class CSubject{
+    ===생성==
+    std::vector<CObserver*> observers;
+    --생성자--
+    CSubject();    
+    --주요함수--
+    void attach(class CObserver* observer);
+    void detach(class CObserver* observer);    
+    void notify(CExternData* pExternData, CCoreData* pCore);
+}
+
+
+class CExternData{
+    ===생성==
+    CSystemData     systemData;
+    CAppData        appData;
+    CRosData        rosData;
+    --생성자 매개변수--
+    ros::NodeHandle _nh
+}
+
+class CBatteryState{
+    --생성자--
+    CBatteryState();
+    --override--
+    void update(CExternData* pExternData)
+}
+
+class CKeyState{
+    --생성자--
+    CKeyState();
+    --override--
+    void update(CExternData* pExternData)
+}
+
+class CPowerState{
+    --생성자--
+    CPowerState();
+    --override--
+    void update(CExternData* pExternData)
+}
+
+class CTiltingState{
+    --생성자--
+    CTiltingState();    
+    --override--
+    void update(CExternData* pExternData)
+}
+
+class CSystemData
+{
+    --생성자--
+    CSystemData();
+}
+
+class CAppData
+{
+    --생성자--
+    CAppData();
+}
+
+class CRosData
+{
+    ===생성==
+    tPose       slamPose;
+    CRawGridMap gridMapRaw;
+    CLidar      lidar;
+    CTrajectory trajectory;
+
+    --생성자--
+    CRosData(ros::NodeHandle _nh);
+    
+    --override--
+    void setSlamPose(double x, double y, double yaw)
+    void setSlamMap(tGridmapInfo info, s8* data)
+    void setLidarDist(double const *dist)
+    void setRawLidarDist(sensor_msgs::LaserScan msg)
+    void setTrajectory(std::list<tPoint> path)
+    void setKeyCmd(std::string cmd)
+}
+
+class CRsaDispatcher
+{
+    ===생성==
+    CRsfMonitor*        pRsfMonitor;
+    CServiceManager*    pServiceMng;
+    --생성자--
+    CRsaDispatcher(ros::NodeHandle _node);
+}
+
+class Application{
+    +Application(ros::NodeHandle nh);
+    +~Application();
+    -CServiceData serviceData;
+    -CRsaDispatcher *pRsaDispatcher;
+}
+
+
+
+class CRsfMonitor{
+    ===참조==
+    CDebugData          *pRosDebug;
+    ===생성==
+    CExternData         externData;
+    --생성자 매개변수--
+    ros::NodeHandle _nh
+    CDebugData* _pRosDebug
+    ===thread==
+    void thread_message_loop();
+    void thread_ros_loop();
+}
+
+
+class CServiceManager
+{
+    ===생성==
+    -CRsuContext*    pContext;
+    -CObstaclemap*   pObstaclemap;
+    -CServiceData*   pServiceData;
+        
+    -CLocation    *pLocation;
+    -CKidnap      *pKidnap;
+
+    -CServiceIdle*       pServcieIdle;
+    -CServiceClean*      pServiceClean;
+    -CServiceExplorer*   pServiceExplore;
+    -CServiceDocking*    pServiceDocking;
+    -CSupplyWater*       pSupplyWater;
+    -CServiceUnDocking*  pServiceUnDocking;
+    -CServiceCharging*   pServiceCharging;    
+  
+    --생성자--
+    CServiceManager(CServiceData* _pServiceData);
+}
+
+class CWheelControl{
+    ===참조==
+    CLocalizData 	*pLocalizData;    
+    
+    ===생성==
+    RSF_CONTROLLER  controller_;	
+	SPDADJ_INFO     spdadj_;
+    CWheelControl();
+    ~CWheelControl();
+
+    ===thread==
+    void thread_wheel();
+}
+
+class CSlamControl
+{
+    ===생성==
+    +CSlamControl();
+    +~CSlamControl();
+}
+
+class CSystemControl
+{
+    ===생성==
+	+CSystemControl();
+	+~CSystemControl();
+}
+
+class CTiltingControl
+{    
+    ===생성==
+    +CTiltingControl();
+    +~CTiltingControl();
+}
+
+
+abstract class CAvoiding
+{
+    ===생성자==
+    +CAvoiding();
+    +~CAvoiding();
+
+    --virtual--
+    bool checkObstacle(tPose robotPose,RSU_OBSTACLE_DATA *pObstacle) = 0;    
+    void startAvoidMoving(RSF_OBSTACLE_MASK mask) = 0;
+    bool cliffAvoiding(RSF_OBSTACLE_MASK mask) = 0;
+    bool bumperAvoiding(RSF_OBSTACLE_MASK mask) = 0;
+    bool knollAvoiding(RSF_OBSTACLE_MASK mask) = 0;    
+    bool frontAvoiding(RSF_OBSTACLE_MASK mask) = 0;
+    bool lidarAvoiding(RSF_OBSTACLE_MASK mask) = 0;
+}
+
+class CWalltracking
+{
+    ===참조==
+    CObstaclemap *pObsMap; 
+	CServiceData *pServiceData;
+    --생성 매개변수--
+    CObstaclemap* _pObsMap
+    CServiceData* _pServiceData
+}
+
+class CSignaltracking
+{
+    ===참조==
+    -CServiceData *pServiceData;
+    --생성 매개변수--
+    CServiceData* _pServiceData    
+}
+
+class CUnDocking
+{
+    ===참조==
+    CServiceData *pServiceData;
+    
+    --생성 매개변수--
+    CServiceData* _pServiceData
+}
+
+class CWaveFrontier
+{
+    ===참조==
+    ===생성자==
+    +CWaveFrontier();
+    +~CWaveFrontier();
+}
+
+class CKidnap
+{
+    ===참조==
+    CServiceData        *pServiceData;
+    CLocation           *pLocation;  
+    ===생성자==
+    +CKidnap(CServiceData* _pServiceData, CLocation* _pLocation);
+    +~CKidnap();
+}
+
+class CLocation
+{
+    ===참조==
+    CServiceData        *pServiceData;    
+
+    ===생성==
+    CRmcl               *pRmcl;
+    --생성 매개변수--
+    CServiceData* _pServiceData
+}
+class CUserInterface << (S,#FF7700) Singleton >>
+{
+    ===생성==
+    CLed led;
+    CSound sound;
+    CDisplay display;    
+}
+
+class CDebugCtr << (S,#FF7700) Singleton >>
+{
+    ===생성==
+    CLed led;
+    CSound sound;
+    CDisplay display;    
+}
+
+class CPathPlanner << (S,#FF7700) Singleton >>
+{
+    ===생성==
+    CLed led;
+    CSound sound;
+    CDisplay display;    
+}
+
+
+
+class CMessageHandler << (S,#FF7700) Singleton >>
+{
+    ===생성==
+    MessageQueue< message_t > mMessageQueue;
+}
+
+class CControl << (S,#FF7700) Singleton >>
+{
+    ===생성==
+	CWheelControl wheel;
+	CSystemControl system;
+	CTiltingControl tilting;
+	CSlamControl slam;
+    --생성자--
+    CControl(CLocalizData* _pLocalizData, CObstacle* _pObstacle );	
+}
+
+class CSupplyWater
+{
+    ===생성자==
+    +CSupplyWater();
+    +~CSupplyWater();
+}

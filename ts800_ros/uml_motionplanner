@@ -1,0 +1,15 @@
+
+@startuml
+
+!include uml_class
+'remove @unlinked
+header motionPlanner
+
+
+CPathPlanner *-- CDstar
+CPathPlanner *-- CGlobalPathPlanner
+CPathPlanner *-- CLocalPathPlanner
+
+CLocalPathPlanner *-- CEscapeWall
+@enduml
+

@@ -1,0 +1,7 @@
+<launch>
+  <arg name="odomPubLoopRate" default="100.0"/>
+
+  <node pkg="everybot_odom_handler" type="everybot_odom_handler_node" name="everybot_odom_handler_node" output="screen">
+    <param name="odomPubLoopRate" value="$(arg odomPubLoopRate)"/>
+  </node>
+</launch> 

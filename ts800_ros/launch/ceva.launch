@@ -1,0 +1,29 @@
+<launch>
+    <!--
+        Run 3i LiDAR TF :
+        ( -2.98 rad = -170.7 deg )
+        lidar arg= base_link => m "x,y,z,yaw,roll,pitch"
+    -->
+    <node pkg="tf" type="static_transform_publisher" name="base_link_to_laser1"
+        args="0.08 0.0 0.0 -2.98 0.0 0.0 /base_link /laser 40" />  
+    
+    <!-- Run 3i LiDAR Ros Driver -->
+    <node name="delta_lidar"    pkg="delta_lidar"  type="delta_lidar_node" output="log">
+        <param name="serial_port"         type="string" value="/dev/ttyS4"/>
+        <param name="frame_id"            type="string" value="laser"/>
+    </node>
+
+    <!-- Start Google Cartographer node with custom configuration file-->
+    <node name="cartographer_node" pkg="cartographer_ros" type="cartographer_node" args="
+          -configuration_directory
+              /home/ebot/catkin_ws/devel/lib/ts800_ros/config/slam_lua
+          -configuration_basename cartographer_with_odom.lua" output="log" launch-prefix="nice -n 6">
+    </node>
+
+    <node name="cartographer_occupancy_grid_node" pkg="cartographer_ros" type="cartographer_occupancy_grid_node" args="-resolution 0.05 -publish_period_sec 10" output="log" launch-prefix="nice -n 6" />
+    <node name="ts800_app" pkg="ts800_ros" type="ts800_app" output="screen" launch-prefix="nice -n 8" />
+    <node name="odom_node" pkg="ts800_ros" type="ts800_odom_node" output="log" launch-prefix="nice -n 8" >
+        <param name="use_send_transform" value="true" />
+    </node>
+
+</launch>

@@ -1,0 +1,72 @@
+
+@startuml
+
+left to right direction
+!include uml_class
+'remove @unlinked
+header monitor
+
+CObstacle --* CServiceData 
+CObstaclemap --* CServiceData 
+CLocalizData --* CServiceData 
+CSignal --* CServiceData 
+CRobotMap --* CServiceData 
+CRosPublishData --* CServiceData 
+CDebugData --* CServiceData 
+CMapStorage --* CServiceData
+CBatteryState --* CServiceData  
+CKeyState --* CServiceData  
+CPowerState --* CServiceData  
+CTiltingState --* CServiceData
+CWaveFrontier --* CServiceData
+CKidnapData --* CServiceData
+CRobotServerBridge --* CServiceData
+
+CObserver <|-- CBatteryState
+CObserver <|-- CKeyState
+CObserver <|-- CPowerState
+CObserver <|-- CTiltingState
+CObserver <|-- CWaveFrontier
+CObserver <|-- CKidnapData 
+CObserver <|-- CObstacle
+CObserver <|-- CObstaclemap
+CObserver <|-- CLocalizData
+CObserver <|-- CSignal
+CObserver <|-- CRobotMap
+CObserver <|-- CDebugData
+CObserver <|-- CMapStorage
+CObserver <|-- CRobotServerBridge
+
+CErrorCollector <|-- CRsfMonitor
+
+CKeyState *-- CButton
+CKeyState *-- CRosKey
+
+CLocalizData *-- CRobotPose
+CLocalizData *-- CLidar
+CRobotPose *-- CLowPassFilter
+CRobotPose *-- CAngleFusion
+
+CObstaclemap *-- CObstacleMapCell
+CRsfMonitor --|> CSubject
+
+CSubject o-- CObserver
+
+CRsfMonitor *-- CExternData
+
+CExternData *-- CSystemData
+CExternData *-- CAppData
+CExternData *-- CRosData
+
+CSystemData --|> SystemInterfaceModel
+CAppData --|> CAppInterface
+CRosData --|> CRosInterface
+
+MessageQueue --o CMessageHandler
+
+note "observer에 의한 CExternData 자동 업데이트" as N1
+'CExternData .. N1
+N1 .. CObserver
+
+@enduml
+

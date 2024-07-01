@@ -1,0 +1,18 @@
+
+@startuml
+
+left to right direction
+!include uml_class
+'remove @unlinked
+header dispatcher
+
+Application *-- CRsaDispatcher
+
+
+CRsaDispatcher *-- CControl
+CRsaDispatcher *-- CRsfMonitor
+CRsaDispatcher *-- CServiceManager
+CRsaDispatcher *-- CServiceData
+
+
+@enduml

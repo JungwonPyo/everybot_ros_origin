@@ -1,0 +1,17 @@
+
+@startuml
+
+!include uml_class
+!include uml_service
+!include uml_controller
+!include uml_monitor
+!include uml_dispatcher
+!include uml_ui
+!include uml_map
+!include uml_motionplanner
+!include uml_debug
+'remove @unlinked
+hide members
+header totall
+
+@enduml

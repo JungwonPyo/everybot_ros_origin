@@ -1,0 +1,15 @@
+<launch>
+    <!--
+        Run 3i LiDAR TF : TS800 WS 2-2
+        #2-1샘플( -2.97 rad = -170.0 deg ) // #3-1샘플(-2.88 rad == -165 deg)
+        lidar arg= base_link => m "x,y,z,yaw,roll,pitch"
+    -->
+    <node pkg="tf" type="static_transform_publisher" name="base_link_to_laser1"
+        args="-0.175 0.0 0.0 -2.88 0.0 0.0 /base_link /laser 40" launch-prefix="nice -n 10"/>  
+    
+    <!-- Run 3i LiDAR Ros Driver-->
+    <node name="delta_lidar"    pkg="delta_lidar"  type="delta_lidar_node" output="screen" launch-prefix="nice -n 10">
+        <param name="serial_port"         type="string" value="/dev/ttyS4"/>
+        <param name="frame_id"            type="string" value="laser"/>
+    </node>
+</launch>

@@ -1,0 +1,42 @@
+<launch>
+    <arg name="use_sim_time" default="false"/>
+    <arg name="odomPubLoopRate" default="100.0"/>
+
+    <!-- application -->
+    <!-- launch-prefix="valgrind leak-check=full show-leak-kinds=all log-file=/home/ebot/log/valgrind_output.txt" -->
+    <!-- <node name="ts800_app" pkg="ts800_ros" type="ts800_app" output="screen"/> -->
+
+    <!--
+        Run 3i LiDAR TF : TS800 WS 2-2
+        2-1샘플( -2.97 rad = -170.0 deg )
+        3-1샘플(-2.88 rad == -165 deg)
+        lidar arg= base_link => m "x,y,z,yaw,roll,pitch"
+    -->
+
+    <!-- madgwick_filter & base_link-imu_link static tf -->
+    <node pkg="tf" type="static_transform_publisher" name="base_link_to_imu1"
+        args="0.0 0.0 0.0 0.0 0.0 0.0 /base_link /imu_link 50" /> 
+    <!-- args="0.31 -0.33 0.0 0.0 0.0 0.0 /base_link /imu_link 50" />  -->
+
+    <node name="madgwick_filter" pkg="imu_filter_madgwick" type="imu_filter_node">
+        <param name="use_mag" value="false"/>
+        <param name="publish_tf" value="false"/>
+        <param name="fixed_frame" value="base_link"/>
+        <rosparam command="load" file="/home/ebot/catkin_ws/devel/lib/ts800_ros/config/madgwick_filter.yaml" />
+    </node>
+
+    <!-- odom package -->
+    <node pkg="everybot_odom_handler" type="everybot_odom_handler_node" name="everybot_odom_handler_node" output="screen">
+        <param name="odomPubLoopRate" value="$(arg odomPubLoopRate)"/>
+    </node>
+
+    <!-- system_monitor_node 빌드 및 사용 법
+        system_monitor_node 빌드 및 사용 법 : CMAkeLists.txt 에서 활성화 시킴
+        아래 주석을 풀고 value에 모니터링하고 싶은 프로세서 이름을 명시함.
+    -->
+    <!--
+    <node name="system_node" pkg="ts800_ros" type="system_monitor_node" output="screen" >
+        <param name ="processor_name" value="cartographer_node"/>
+    </node>
+    -->
+</launch>

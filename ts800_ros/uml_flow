@@ -1,0 +1,38 @@
+
+@startuml
+
+rsaDispatcher -> rsfMonitor : data update
+
+activate rsfMonitor
+rsfMonitor->CServiceData : notify(&externData)
+
+group update data
+CServiceData->CServiceData : serviceData.battery
+CServiceData->CServiceData : serviceData.key
+CServiceData->CServiceData : serviceData.power
+CServiceData->CServiceData : serviceData.localiz
+CServiceData->CServiceData : serviceData.obstacle
+CServiceData->CServiceData : serviceData.signal
+CServiceData->CServiceData : serviceData.cleanMap
+CServiceData->CServiceData : serviceData.tilting
+end
+
+rsfMonitor->externData : sendServiceDataToSystemInterface()
+deactivate rsfMonitor
+
+rsaDispatcher -> CServiceManager : callServiceHandler()
+CServiceManager -> CServiceManager : 전원 종료 명령 처리
+CServiceManager -> CServiceManager : 에러 처리
+group procService()
+CServiceManager -> CServiceManager : ChangeWaterLevel()
+CServiceManager -> CServiceManager : checkChangeService()
+CServiceManager -> CServiceManager : checkNextService()
+CServiceManager -> CRsuContext : serviceRun()
+end
+CRsuContext -> service : selected service run
+
+service -> service : serviceRun()
+
+rsaDispatcher -> rsaDispatcher : updateUi (0.1초 마다)
+
+@enduml

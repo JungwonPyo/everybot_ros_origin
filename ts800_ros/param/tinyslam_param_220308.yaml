@@ -1,0 +1,35 @@
+# Modules setup
+# avg - modified cell model , base - original cell model
+cell_type: avg 
+#“const” -- original occupancy estimator; “area” -- dynamic occupancy estimator
+occupancy_estimator: const
+# Determines how to handle out of range laser measurements: true -- ignore such measurements, false -- process as empty cells.
+skip_exceeding_lsr_vals: false
+
+# Frame_names setup
+odom: odom
+robot_pose: base_link
+
+# Map setup
+map_height_in_meters: 2
+map_width_in_meters: 2
+map_meters_per_cell: 0.05
+
+# Internal constants setup
+#The initial probability of cell to be occupied (i.e. the probability of laser scan data to be valid)
+base_occupied_prob: 0.95
+# The initial probability of cell to be empty (i.e. the probability of out of range laser scan data to be valid)
+base_empty_prob: 0.01
+hole_width: 0.1
+
+# Internal scan matcher constants
+scmtch_sigma_XY_MonteCarlo: 0.2
+scmtch_sigma_theta_MonteCarlo: 0.3 # default 0.1
+scmtch_limit_of_bad_attempts: 100
+scmtch_limit_of_total_attempts: 500
+
+# Internal constants for ros
+ros_rviz_map_publishing_rate: 1.0
+ros_tf_buffer_duration: 5.0 # in seconds
+ros_filter_queue_size: 1000
+ros_subscribers_queue_size: 1000

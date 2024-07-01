@@ -1,0 +1,13 @@
+
+@startuml
+
+!include uml_class
+'remove @unlinked
+header debugCtr
+
+CDebugCtr *-- debugPathPlan
+CDebugCtr *-- debugExplorer
+
+
+@enduml
+

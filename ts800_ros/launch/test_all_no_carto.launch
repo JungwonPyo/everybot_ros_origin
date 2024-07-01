@@ -1,0 +1,25 @@
+<launch>
+    <arg name="use_sim_time" default="false"/>
+
+
+   <!-- application -->
+    <node name="ts800_app" pkg="ts800_ros" type="ts800_app" output="screen" >
+        <!--
+        <remap from="laser_scan" to="scan" />
+        <rosparam file="$(find ts800_ros)/param/tinyslam_param_220308.yaml" command='load' />
+        -->
+    </node>
+
+    <!-- odometry publisher -->
+    <!-- "use_send_transform = true", map-odom-base_link-laser -->
+    <!--
+    <node name="odom_node" pkg="ts800_ros" type="ts800_odom_node" output="log" >
+        <param name="use_send_transform" value="false" />
+    </node>
+    -->
+    <!-- lidar -->
+    <include file="$(find ts800_ros)/launch/ydlidar_ts800_es.launch" />
+    
+    <!-- cartographer -->
+    <!-- <include file="$(find ts800_ros)/launch/cartographer.launch" /> -->
+</launch>

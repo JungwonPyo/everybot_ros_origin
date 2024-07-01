@@ -1,0 +1,13 @@
+
+@startuml
+
+!include uml_class
+'remove @unlinked
+header lidarInterface
+
+
+CLidarInterface *-- CSerialConnection
+CLidarInterface *-- C3iroboticsLidar
+
+@enduml
+

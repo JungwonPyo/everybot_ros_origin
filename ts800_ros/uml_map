@@ -1,0 +1,22 @@
+
+@startuml
+
+left to right direction
+!include uml_class
+remove @unlinked
+header map
+
+CGridMap <|-- CSimplifyGridMap
+CGridMap <|-- CRawGridMap
+
+CRosData *-- CRawGridMap
+
+CCleanPlan <|-- CRobotMap
+CObserver <|-- CRobotMap
+
+CRobotMap *-- CSimplifyGridMap
+CRobotMap *-- CRobotTrajectory
+
+CRobotTrajectory *--CTrajectory
+@enduml
+

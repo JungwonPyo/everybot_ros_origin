@@ -1,0 +1,53 @@
+
+@startuml
+left to right direction
+!include uml_class
+'remove @unlinked
+header service
+CRobotSlamPose --* CServiceManager
+CRsuContext --* CServiceManager
+CServiceCharging --* CServiceManager
+CServiceClean --* CServiceManager
+CServiceDocking --* CServiceManager
+CServiceExplorer --* CServiceManager
+CServiceIdle --* CServiceManager
+CServiceUnDocking --* CServiceManager
+CServiceWifi --* CServiceManager
+CDryMop --* CServiceManager
+CServiceReady --* CServiceManager
+CServiceMacro --* CServiceManager
+
+CServiceManager *-- CKidnap
+CServiceManager *-- CLocation
+CServiceManager *-- CRsuContext
+CServiceManager *-- CSupplyWater
+CErrorHandler <|-- CServiceManager
+CLocation *-- CRmcl
+
+service <--o CRsuContext
+
+service <|.. CServiceIdle  
+service <|.. CServiceCharging  
+service <|.. CServiceClean
+service <|.. CServiceDocking
+service <|.. CServiceExplorer
+service <|.. CServiceUnDocking
+service <|.. CServiceWifi
+CPathFinderInterface <|..  CDstar
+
+CServiceDocking *-- CDocking
+CServiceClean *-- CClean
+CServiceClean *-- CWalltracking
+CServiceExplorer *-- CExplorer
+CServiceUnDocking *-- CUnDocking
+CLocalPathPlanner *-- CAvoidingMotionPlanner
+
+CDocking *-- CSignaltracking
+CDocking *-- CFindCharger
+CClean *-- CCleanPatterns
+CCleanPatterns *-- CPatternLine
+CPatternLine --|> CAvoiding
+CWalltracking --|> CAvoiding
+CAvoidingMotionPlanner --|> CAvoiding
+
+@enduml

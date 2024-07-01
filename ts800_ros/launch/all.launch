@@ -1,0 +1,3 @@
+<launch>
+    <include file="$(find ts800_ros)/launch/all_ts800_ws_2_2.launch" />
+</launch>

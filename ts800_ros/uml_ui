@@ -1,0 +1,13 @@
+
+@startuml
+
+!include uml_class
+'remove @unlinked
+header controller
+
+CUserInterface *-- CLed
+CUserInterface *-- CSound
+CUserInterface *-- CDisplay
+
+@enduml
+

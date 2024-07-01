@@ -1,0 +1,13 @@
+
+@startuml
+
+!include uml_class
+'remove @unlinked
+header controller
+
+CControl *-- CSlamControl
+CControl *-- CTiltingControl
+CControl *-- CSystemControl
+
+@enduml
+

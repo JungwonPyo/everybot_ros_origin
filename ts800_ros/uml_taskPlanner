@@ -1,0 +1,142 @@
+@startuml 
+
+'left to right direction
+
+note as n
+**고려 사항.**
+----
+**전체 운영 관련**
+#way point 생성은 누가 ??
+#
+----
+**장애물 처리 관련.**
+#라인청소 중.
+## 맵 또는 LiDAR에 의해 진행 못할 경우 
+## 범핑일 경우
+#탐색 중
+## 맵 또는 LiDAR에 의해 진행 못할 경우
+## 범핑일 경우
+#장애물 있을때 새로운 경로 생성.
+## CGlobalPathPlanner 의editWayPoint();
+
+end note
+
+
+class CControl << (S,#FF7700) Singleton >> 
+{ 
+    ===생성==
+    CWheelControl wheel;
+    CSystemControl system; 
+    CTiltingControl tilting; 
+    CSlamControl slam; 
+
+    --생성자-- 
+    CControl(CLocalizData* _pLocalizData, CObstacle* _pObstacle ); 
+} 
+
+class CPathPlanner << (S,#FF7700) Singleton >> 
+{ 
+    - CServiceData* pServiceData; 
+    - CLocalizData* pLocalizData; 
+    - bool bThTaskHandler; 
+    - std::thread thTaskHandler; 
+    - CPathPlanner navigation; 
+    =threadTask() <<- thread 돌고 있어요.
+} 
+
+
+class CPathPlanner 
+{ 
+    ==COneTargetPathController 클래스에서 넘어가야할것들 ==
+    +void start(const tPose& robotPose, tPose targetPose, bool setHeadingStartPointFlag, bool setHeadingEndPointFlag);
+    +void start(const tPose& robotPose, tPose targetPose, bool setHeadingStartPointFlag, bool setHeadingEndPointFlag, tProfile prof);
+    +void startRotate(const tPose& robotPose, double targetAngle, tProfile prof);
+    +void proc(const tPose& robotPose);
+    +bool isDoing();
+    +bool isComplete();
+    +bool isFail();
+    +tTwist getControlVelocity();
+    +double getCrossDistErr();
+}
+note left of CPathPlanner
+    AS-IS : CNavigationTask 에서 파생.
+    TO-BE : 영역 이동. (백인철 의견, local & global path planning을 생각해서 결정필요.) 
+end note
+ 
+class CMotionController 
+{
+    // AS - IS : 로봇 모션제어 함수들 정의. (속도값만 반환) 
+    // TO - BE : 유지. 
+} 
+
+
+enum E_ACTION_TYPE
+{
+    ROTATE_TO_POINT_ON_MAP,
+    ROTATE_TO_ANGLE_ON_MAP,
+    ROTATE_TO_ANGLE_ON_ROBOT,
+    ROTATE_ON_VELOCITY,
+    LINEAR_TO_POINT_ON_MAP,
+    LINEAR_TO_DISTANCE_ON_ROBOT,
+    LINEAR_ON_VELOCITY,
+    TARGET_ROTATE,
+    TARGET_NONE
+}
+
+
+struct tAction{
+    E_ACTION_TYPE type;
+    double targetAngle;
+    double targetX, targetY;    
+    double desiredV,desiredW;
+}
+
+class CWayPoint
+{
+    -std::list<tAction> action;
+    +void setAction(tAction set)
+    +void setAction(std::list<tAction> set)
+    +void clearAction();
+    +tAction popAction();
+    +getActionCount();
+}
+
+class CGlobalPathPlanner
+{
+    -CWayPoint wayPoint;    
+    +void setWayPoint();
+    +void startAction();
+    +void stopAction();
+    +void editWayPoint();
+    +void checkLocalPathPlanner(); -> 이곳에서 editWayPoint() 결정.
+
+    
+}
+note left of CGlobalPathPlanner
+    # 기능
+    ## CWayPoint를 전달 받아 관리한다.
+    ## 로컬회피로 인해 수정 요청이 있을시 editWayPoint()
+end note
+
+class CLocalPathPlanner
+{
+    // 초반에는 회피 처리 패턴만 담당.
+    proc(); -> CAvoid.obstacleChecker(); <- 이게 항상 돌다가 처리    
+    
+
+}
+note left of CLocalPathPlanner
+    # 기능
+    ## 범핑 발생!! 라인(targetPoint) 중 반원 회피 후 이어서 가기.
+    ## 라이다 캣치!! way point  global 한태 waypoint 재 생성 요청
+end note
+
+CServiceData -- CPathPlanner
+CPathPlanner *-- CPathPlanner
+CPathPlanner *-- CGlobalPathPlanner
+CGlobalPathPlanner *-- CLocalPathPlanner
+CLocalPathPlanner --|> CAvoiding
+CMotionController --* CLocalPathPlanner
+CMotionController -- CControl
+
+@enduml
