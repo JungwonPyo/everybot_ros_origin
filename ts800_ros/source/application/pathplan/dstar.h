@@ -16,18 +16,82 @@
 #include <queue>
 #include <list>
 #include <unordered_map>
-#include "utils.h"
-#include "commonStruct.h"
 #include <math.h>
-#include "robotmap.h"
-#include "systemTool.h" 
-#include "pathFinderInterface.h"
-#include "pthreadLockGuard.h"
-#include "opencv2/opencv.hpp"
 
 #define hash_map unordered_map
 using namespace std;
 using namespace __gnu_cxx;
+
+
+/**
+ * @brief (x, y) 에 대한 구조체 정의 
+ * ex : 각도 정보가 필요 없이 실수의 좌표가 필요한경우
+ */
+typedef struct _tPoint
+{
+    _tPoint() : x{0.0}, y{0.0} {}
+    _tPoint(double _x, double _y) : x{_x}, y{_y} {}
+    double x;   //단위 : m
+    double y;   //단위 : m
+
+    /// Operator of points summation by element-wise addition.
+    _tPoint operator+(const _tPoint &p) const {return _tPoint(x + p.x, y + p.y);}
+
+    /// Returns additive inverse of the point.
+    _tPoint operator-() const {return _tPoint(-x, -y);}
+
+    // Equality operator
+    bool operator==(const _tPoint &p) const { return (x == p.x) && (y == p.y); }
+
+     // 유클리디안 거리 계산 함수
+    static double distance(const _tPoint& a, const _tPoint& b) {
+        return sqrt(pow(b.x - a.x, 2) + pow(b.y - a.y, 2));
+    }
+
+    // 선분의 기울기 계산 함수
+    static double slope(const _tPoint& a, const _tPoint& b) {
+        if (b.x == a.x) {
+            return 0.0; // 수직 선분
+        }
+        return static_cast<double>(b.y - a.y) / (b.x - a.x);
+    }
+}tPoint;
+
+
+/**
+ * @brief x, y, angle 에 대한 위치 구조체
+ * ex : 로봇의 위치, 타겟 위치
+ */
+typedef struct _tPose
+{
+#if defined (USED_RBT_PLUS) && (USED_RBT_PLUS == 1)
+    _tPose() : x{0.0}, y{0.0}, angle{0.0}, calSn{0} {}
+    _tPose(double _x, double _y, double _angle) : x{_x}, y{_y}, angle{_angle} {}
+    _tPose(double _x, double _y, double _angle, unsigned int _calSn) : x{_x}, y{_y}, angle{_angle}, calSn{_calSn} {}
+#else
+    _tPose() : x{0.0}, y{0.0}, angle{0.0} {}
+    _tPose(double _x, double _y, double _angle) : x{_x}, y{_y}, angle{_angle} {}
+#endif
+
+    double x;   //단위 : m
+    double y;   //단위 : m
+    double angle;   //단위 : rad or deg.... -> 통일 필요
+#if defined (USED_RBT_PLUS) && (USED_RBT_PLUS == 1)  //인 경우 calibration no
+    unsigned int calSn; //
+#endif
+    bool operator==(const _tPose& __a)
+    {
+        return __a.x == this->x && __a.y == this->y && __a.angle == this->angle;
+    }
+    double distance(const tPoint& other) const {
+        return std::sqrt((x - other.x) * (x - other.x) + (y - other.y) * (y - other.y));
+    }
+    tPoint convertPoint() const{
+        return tPoint(x, y);
+    }
+}tPose;
+
+
 class state 
 {
 public:
@@ -121,7 +185,31 @@ typedef struct tDstarWallPoint {
     }
 } tDstarWallPoint;
 
-class CDstar : public CPathFinderInterface
+/**
+ * @brief grid map 이나 이미지 같은곳에서 사용하는 좌표계
+ * 
+ */
+typedef struct
+{
+    int x;
+    int y;
+}tCellPoint;
+
+
+typedef struct _tGridmapInfo
+{
+    _tGridmapInfo() : resolution{0.0}, width{0}, height{0}, origin_x{0.0}, origin_y{0.0} {}
+    _tGridmapInfo(float _resolution, unsigned int _width, unsigned int _height, float _origin_x, float _origin_y) 
+        : resolution{_resolution}, width{_width}, height{_height}, origin_x{_origin_x}, origin_y{_origin_y} {}
+
+    float resolution;   // [m/cell]
+    unsigned int width;          // [cell]
+    unsigned int height;         // [cell]
+    float origin_x;     // cell (0,0) 기준 map 중심 위치 [m]
+    float origin_y;
+}tGridmapInfo;
+
+class CDstar
 {
 private:    
     
@@ -143,8 +231,7 @@ private:
 public:    
     CDstar();
     ~CDstar();    
-    void findNearestPath(tPose robotPose, std::list<tPoint> searchingPoints, 
-        int searchingCnt);
+    void findNearestPath(tPoint start, tPoint goal);
 
     //wall 관련.
     bool isWall(tPoint point);
@@ -158,7 +245,7 @@ public:
     void clearObstacleWall();
     std::list <tDstarWallPoint> combineWall(std::list <tDstarWallPoint> grid, std::list <tDstarWallPoint> obstacle);
     
-    void makeWallListFromGridMap(tPose robotPose, tGridmapInfo mapInfo, u8 *pGridmap);
+    std::list<tPoint> makeWallListFromGridMap(tPose robotPose, tGridmapInfo mapInfo, unsigned char *pGridmap);
     void setObstacleWall(std::list <tDstarWallPoint> &set);
 
     void    init(tPose robotPose, tPoint goalPoint);
@@ -180,17 +267,16 @@ public:
 
     void    updatePoint(std::list <tDstarWallPoint> &set);
     void    updatePoint(int pointX, int pointY, double costValue);
-    void    updateGoal(tPoint goalPoint); 
-    bool    copyDstarGridMap(u8 *& dest, tGridmapInfo *pInfo);
+    void    updateGoal(tPoint goalPoint);     
     bool    isXYclose(double x, double y); 
     bool    replan();
     void    getPath(list<tPoint> &path, tPoint orgTarget);
     void    clearWall();
     list<state> shortestPath;
 
-    Mat where(const Mat &condition, const Mat &x, const Mat &y);
-
-
+    void getNeighbours8(int n_array[], int position, int map_width);
+    bool isValid(int x, int y, int rows, int cols);
+    bool getNearestValidPosition(int newPosition[], int robotCellX, int robotCellY, tGridmapInfo mapInfo, u8 *pGridmap);
 
 private:
     tDstarData dstarData_;

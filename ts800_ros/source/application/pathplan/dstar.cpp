@@ -1,18 +1,231 @@
-#include "dstar.h"
-#include "control/motionController.h"
-#include "rosPublisher.h"
 
-/********** 시간 측정 관련 define **********************/
-#define USE_TIME_CHECK 0 // 함수 시간 측정 사용 유무
-#define USE_TIME_WARNING_LIMIT 20.0 // 경고가 되는 시간 기준 (단위 ms) (기준보다 오래걸리면 경고문 출력됩니다.)
-// @@@ 시작 측정 종료 매크로 @@@
-// time 에는 CStopWatch의 getTime()를 넣어주세요.
-#define TIME_CHECK_END(time)    {printTime(USE_TIME_CHECK, USE_TIME_WARNING_LIMIT, time);}0
-/******************************************************/
+#include "everybot_planner/dstar.h"
+#include <algorithm> 
+#include <cstring>
+
+#define CELL_RESOLUTUION 0.05
+#define CELL_X 1000
+#define CELL_Y 1000
+#define CELL_SIZE CELL_X * CELL_Y
+#define CELL_GRID_ORG_X CELL_RESOLUTUION * (CELL_X / 2) * -1
+#define CELL_GRID_ORG_Y CELL_RESOLUTUION * (CELL_Y / 2) * +1
+#define GRAY_LV_KNOWN_AREA      255
+#define GRAY_LV_UNKNOWN_AREA    128
+#define GRAY_LV_KNOWN_WALL      0
+#define GRAY_LV_UNKNOWN_WALL    200
+#define MAP_DOWNSCALE_VALUE 5  // wfd(탐색) 및 d*(경로계획)에서 사용되는 map의 스케일을 결정 ex) 6으로 입력하면 한 셀의 길이가 0.05*6 = 30cm
+const double EXPLORE_GOAL_MARGIN = 0.5;
+
+double distanceTwoPoint(tPoint a, tPoint b)
+{
+    return sqrt((a.x-b.x)*(a.x-b.x)+(a.y-b.y)*(a.y-b.y));
+}
+double distanceTwoPoint(tPoint a, tPose b)
+{
+    return sqrt((a.x-b.x)*(a.x-b.x)+(a.y-b.y)*(a.y-b.y));
+}
+double distanceTwoPoint(tPose a, tPoint b)
+{
+    return sqrt((a.x-b.x)*(a.x-b.x)+(a.y-b.y)*(a.y-b.y));
+}
+double distanceTwoPoint(tPose a, tPose b)//icbaek, 22.10.20 추가 오버라이드
+{
+    return sqrt((a.x-b.x)*(a.x-b.x)+(a.y-b.y)*(a.y-b.y));
+}
+
+
+
+/** 
+ * @brief m단위의 (x, y) 좌표계를 cell map의 좌표 값으로 변환함. 
+ *  
+ * @param coordX m단위 좌표계 x값  
+ * @param coordY m단위 좌표계 y값 
+ * @param resolution 단위 m/cell 
+ * @param cellWidth cell단위 좌표계 width 
+ * @param cellHeight cell단위 좌표계 height 
+ * @param *cellx cell단위 좌표계 x 
+ * @param *cellx cell단위 좌표계 y
+ */ 
+void convertCoord2CellCoord(double coordX, double coordY, double resolution, int cellWidth, int cellHeight, int *cellx, int *celly)
+{   
+    int index = 0;
+    int cellSize = cellWidth * cellHeight;
+    double originCellX = (-0.5)*resolution*cellWidth;
+    double originCellY = (-0.5)*resolution*cellHeight;
+
+    *cellx = (int) ( ( coordX - originCellX ) / resolution + 0.5); //반올림
+    *celly = (int) ( ( coordY - originCellY ) / resolution + 0.5); //반올림        
+}
+
+const int cellSize = CELL_X * CELL_Y;
+const int originCellX = CELL_RESOLUTUION * (CELL_X / 2) * -1;
+const int originCellY = CELL_RESOLUTUION * (CELL_Y / 2) * -1;
+void convertCoord2CellCoord(double coordX, double coordY, int *cellx, int *celly)
+{   
+    int index = 0;        
+    
+    *cellx = (int) ( ( coordX - originCellX ) / CELL_RESOLUTUION + 0.5); //반올림
+    *celly = (int) ( ( coordY - originCellY ) / CELL_RESOLUTUION + 0.5); //반올림        
+}
+
+
+
+/** 
+ * @brief m단위의 (x, y) 좌표계를 cell map의 x, y 값으로 변환함. 
+ *  
+ * @param coordX m단위 좌표계 x값  
+ * @param coordY m단위 좌표계 y값 
+ * @param pCellX cell x값  
+ * @param pCellY cell y값 
+ * @param resolution 단위 m/cell 
+ * @param cellWidth cell단위 좌표계 width 
+ * @param cellHeight cell단위 좌표계 height 
+ * @return cell map의 index, -1 이면 오류
+ */ 
+bool convertCoordi2Index(double coordX, double coordY, int *pCellX, int *pCellY, double resolution, int cellWidth, int cellHeight)
+{   
+    bool bRet = true;
+    int cellSize = cellWidth * cellHeight;
+    double originCellX = resolution * (cellWidth / 2) * -1;    
+    double originCellY = resolution * (cellHeight / 2) * -1;
+
+    int cellX = (int) ( ( coordX - originCellX ) / resolution + 0.5); //반올림
+    int cellY = (int) ( ( coordY - originCellY ) / resolution + 0.5); //반올림
+    
+    if( cellX >= cellWidth || cellY >= cellHeight || cellX < 0 || cellY < 0){
+        bRet = false;
+    }
+
+    *pCellX = cellX;
+    *pCellY = cellY;
+
+    return bRet;
+}
+
+
+/**
+ * @brief 선분과 점 사이의 수직 거리 구함.
+ * 
+ * @param pt 
+ * @param lineStart 
+ * @param lineEnd 
+ * @return double 
+ */
+double perpendicularDistance(const tPoint& pt, const tPoint& lineStart, const tPoint& lineEnd)
+{
+    double dx = lineEnd.x - lineStart.x;
+    double dy = lineEnd.y - lineStart.y;
+
+    // Normalise
+    double mag = std::sqrt(dx * dx + dy * dy);
+    if (mag > 0.0)
+    {
+        dx /= mag;
+        dy /= mag;
+    }
+
+    double pvx = pt.x - lineStart.x;
+    double pvy = pt.y - lineStart.y;
+
+    // Get dot product (project pv onto normalized direction)
+    double pvdot = dx * pvx + dy * pvy;
+
+    // Scale line direction vector
+    double dsx = pvdot * dx;
+    double dsy = pvdot * dy;
+
+    // Subtract this from pv
+    double ax = pvx - dsx;
+    double ay = pvy - dsy;
+
+    return std::sqrt(ax * ax + ay * ay);
+}
+
+
+/**
+ * @brief RDP 알고리즘
+ * 선분으로 구성된 곡선을 점 수가 적은 유사한 곡선으로 줄이는 알고리즘.
+ * @param pointList 원본 좌표들
+ * @param epsilon 입실론이 클수록 단순화가 커짐..
+ * @param out 결과 좌표들
+ */
+void ramerDouglasPeucker(const std::list<tPoint>& pointList, double epsilon, std::list<tPoint>& out)
+{
+    std::list<tPoint> temp;
+    if (pointList.size() < 2)
+    {
+        out = pointList;
+        // ceblog(LOG_LV_NECESSARY,  BOLDBLUE," throw std::invalid_argument(Not enough points to simplify");
+        return;
+    }
+
+    // Find the point with the maximum distance from line between start and end
+    double dmax = 0.0;
+    size_t index = 0;
+    size_t end = pointList.size() - 1;
+    size_t i = 1;
+
+    auto it = pointList.begin();
+    std::advance(it, 1);
+
+    for (; i < end; ++i, ++it)
+    {
+        double d = perpendicularDistance(*it, pointList.front(), pointList.back());
+        if (d > dmax)
+        {
+            index = i;
+            dmax = d;
+        }
+    }
+
+    // If max distance is greater than epsilon, recursively simplify
+    if (dmax > epsilon)
+    {
+        // Recursive call
+        std::list<tPoint> recResults1;
+        std::list<tPoint> recResults2;
+
+        auto firstLineBegin = pointList.begin();
+        auto firstLineEnd = std::next(firstLineBegin, index + 1);
+        std::list<tPoint> firstLine(firstLineBegin, firstLineEnd);
+
+        auto lastLineBegin = std::next(firstLineBegin, index);
+        std::list<tPoint> lastLine(lastLineBegin, pointList.end());
+
+        ramerDouglasPeucker(firstLine, epsilon, recResults1);
+        ramerDouglasPeucker(lastLine, epsilon, recResults2);
+
+        // Build the result list
+        temp = std::move(recResults1);
+        temp.splice(temp.end(), recResults2);
+
+        if (temp.size() < 2)
+        {
+            throw std::runtime_error("Problem assembling output");
+        }
+    }
+    else
+    {
+        // Just return start and end points
+        temp.clear();
+        temp.push_back(pointList.front());
+        temp.push_back(pointList.back());
+    }
+
+    out.push_back(temp.front());
+    for(tPoint point: temp)
+    {
+        if(distanceTwoPoint(point, out.back())<0.01)
+        {
+            continue;
+        }
+        out.push_back(point);
+    }
+}
 
 CDstar::CDstar()
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
 
     pthread_mutex_init(&mutexDstarCore, nullptr);
     pthread_mutex_init(&mutexObstacleWall, nullptr);
@@ -34,16 +247,16 @@ CDstar::CDstar()
     dstarData_.unknownCellCost = 1; // unknown 셀의 cost
     bObstacleWallUpdate = false;
     bUpdatedGridMapWall = false;
-    eblog(LOG_LV,  "CDstar");
+    // eblog(LOG_LV,  "CDstar");
 
     init(tPose(0.0,0.0,0.0), tPoint(1.0,1.0));  //임의의 포즈를 생성 해놓는다.
     
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
 }
 
 CDstar::~CDstar()
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
     
     if (!shortestPath.empty()) shortestPath.clear(); 
     while (!openList.empty()) openList.pop();
@@ -54,9 +267,9 @@ CDstar::~CDstar()
     pthread_mutex_destroy(&mutexObstacleWall);
     pthread_mutex_destroy(&mutexGridMapWall);
    
-    eblog(LOG_LV,  "~CDstar");
+    // eblog(LOG_LV,  "~CDstar");
     
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
 }
 
 /**
@@ -79,22 +292,22 @@ float CDstar::keyHashCode(state point)
  */
 bool CDstar::isValid(state point)
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
     
     ds_oh::iterator cur = openHash.find(point);
 
     if (cur == openHash.end())
     {
-        TIME_CHECK_END(__debug_sw.getTime());
+        // TIME_CHECK_END(__debug_sw.getTime());
         return false;
     }
     if (!checkValueClose(keyHashCode(point), cur->second))
     {
-        TIME_CHECK_END(__debug_sw.getTime());
+        // TIME_CHECK_END(__debug_sw.getTime());
         return false;
     }
     
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
     return true;
 }
 
@@ -105,16 +318,16 @@ bool CDstar::isValid(state point)
  */
 void CDstar::getPath(list<tPoint>& paths, tPoint orgTarget)
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
     
     if(shortestPath.empty())
     {
-        eblog(LOG_LV_NECESSARY,  "[ DSTAR ]  origin path empty!");
+        // eblog(LOG_LV_NECESSARY,  "[ DSTAR ]  origin path empty!");
         paths.emplace_back(tPoint(0, 0));
     }
     else
     {
-        eblog(LOG_LV_NECESSARY,  "[ DSTAR]  path origin size : " << shortestPath.size());
+        // eblog(LOG_LV_NECESSARY,  "[ DSTAR]  path origin size : " << shortestPath.size());
 
         std::list<tPoint> firstTunedPath;
         tPoint pathPoint;
@@ -152,8 +365,8 @@ void CDstar::getPath(list<tPoint>& paths, tPoint orgTarget)
 #endif
         
     }
-    ceblog(LOG_LV_PATHPLAN, BOLDGREEN, "called");
-    TIME_CHECK_END(__debug_sw.getTime());
+    // ceblog(LOG_LV_PATHPLAN, BOLDGREEN, "called");
+    // TIME_CHECK_END(__debug_sw.getTime());
 }
 
 bool CDstar::checkNeighboursWall(state point)
@@ -191,17 +404,17 @@ bool CDstar::checkNeighboursWall(state point)
  */
 bool CDstar::checkOccupied(state point)
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
 
     ds_ch::iterator cur = cellHash.find(point);
 
     if (cur == cellHash.end())
     {
-        TIME_CHECK_END(__debug_sw.getTime());
+        // TIME_CHECK_END(__debug_sw.getTime());
         return false;
     }
     
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
     return (cur->second.cost < 0);
 }
 
@@ -215,7 +428,7 @@ bool CDstar::checkOccupied(state point)
  */
 void CDstar::init(tPose robotPose,tPoint goalPoint)
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
 
     cellHash.clear();
     openHash.clear();
@@ -223,12 +436,12 @@ void CDstar::init(tPose robotPose,tPoint goalPoint)
     tCellPoint goal;    // 목표 셀 좌표
     tCellPoint start;   // 시작 셀 좌표
 
-    utils::coordination::convertCoord2CellCoord(robotPose.x, robotPose.y, &start.x, &start.y);
-    utils::coordination::convertCoord2CellCoord(goalPoint.x, goalPoint.y, &goal.x, &goal.y);
+    convertCoord2CellCoord(robotPose.x, robotPose.y, &start.x, &start.y);
+    convertCoord2CellCoord(goalPoint.x, goalPoint.y, &goal.x, &goal.y);
         
-    ceblog(LOG_LV_PATHPLAN, BOLDBLUE, "openList -pre : " <<openList.size()); 
+    // ceblog(LOG_LV_PATHPLAN, BOLDBLUE, "openList -pre : " <<openList.size()); 
     ds_pq().swap(openList);
-    ceblog(LOG_LV_PATHPLAN, BOLDBLUE, "openList -cls : " <<openList.size()); 
+    // ceblog(LOG_LV_PATHPLAN, BOLDBLUE, "openList -cls : " <<openList.size()); 
 
     dstarData_.k_m = 0;
 
@@ -249,7 +462,7 @@ void CDstar::init(tPose robotPose,tPoint goalPoint)
     dstarData_.startPoint = calculateKey(dstarData_.startPoint);
 
     dstarData_.s_last = dstarData_.startPoint;
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
 }
 
 /**
@@ -309,11 +522,11 @@ bool CDstar::getFindNearSuccess()
  */
 void CDstar::makeNewCell(state point)
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
     
     if (cellHash.find(point) != cellHash.end())
     {
-        TIME_CHECK_END(__debug_sw.getTime());
+        // TIME_CHECK_END(__debug_sw.getTime());
         return;
     }
 
@@ -323,7 +536,7 @@ void CDstar::makeNewCell(state point)
     tmp.cost = dstarData_.unknownCellCost;
     cellHash[point] = tmp;
 
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
 }
 
 /**
@@ -350,21 +563,21 @@ double CDstar::getG(state point)
  */
 double CDstar::getRhs(state point)
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
 
     if (point == dstarData_.goalPoint)
     {
-        TIME_CHECK_END(__debug_sw.getTime());
+        // TIME_CHECK_END(__debug_sw.getTime());
         return 0;
     }
 
     if (cellHash.find(point) == cellHash.end())
     {
-        TIME_CHECK_END(__debug_sw.getTime());
+        // TIME_CHECK_END(__debug_sw.getTime());
         return heuristic(point, dstarData_.goalPoint);
     }
     
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
     return cellHash[point].rhs;
 }
 
@@ -377,12 +590,12 @@ double CDstar::getRhs(state point)
  */
 void CDstar::setG(state point, double g)
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
 
     makeNewCell(point);
     cellHash[point].g = g;
     
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
 }
 
 
@@ -394,12 +607,12 @@ void CDstar::setG(state point, double g)
  */
 double CDstar::setRhs(state point, double rhs)
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
 
     makeNewCell(point);
     cellHash[point].rhs = rhs;
     
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
 }
 
 /**
@@ -411,7 +624,7 @@ double CDstar::setRhs(state point, double rhs)
  */
 double CDstar::eightCondist(state point1, state point2)
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
     
     double minDis = fabs(point1.x - point2.x);
     double maxDis = fabs(point1.y - point2.y);
@@ -423,7 +636,7 @@ double CDstar::eightCondist(state point1, state point2)
         maxDis = temp;
     }
     
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
     return ((M_SQRT2 - 1.0) * minDis + maxDis);
 }
 
@@ -435,14 +648,14 @@ double CDstar::eightCondist(state point1, state point2)
  */
 int CDstar::computeShortestPath()
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
 
     list<state> pointList;
     list<state>::iterator i;
 
     if (openList.empty())
     {        
-        TIME_CHECK_END(__debug_sw.getTime());
+        // TIME_CHECK_END(__debug_sw.getTime());
         return 1;
     }
 
@@ -451,7 +664,7 @@ int CDstar::computeShortestPath()
     {
         if (k++ > dstarData_.maxSteps)
         {
-            eblog(LOG_LV, "computeShortestPath return -1 k[ " << k << " ] maxStep[ " << dstarData_.maxSteps << "] tick[ " << SYSTEM_TOOL.getSystemTick() << " ]");
+            // eblog(LOG_LV, "computeShortestPath return -1 k[ " << k << " ] maxStep[ " << dstarData_.maxSteps << "] tick[ " << SYSTEM_TOOL.getSystemTick() << " ]");
             return -1;
         }
 
@@ -464,7 +677,7 @@ int CDstar::computeShortestPath()
         {
             if (openList.empty())
             {
-                TIME_CHECK_END(__debug_sw.getTime());
+                // TIME_CHECK_END(__debug_sw.getTime());
                 return 1;
             }
 
@@ -478,7 +691,7 @@ int CDstar::computeShortestPath()
             
             if (!(point < dstarData_.startPoint) && (!test))
             {
-                TIME_CHECK_END(__debug_sw.getTime());
+                // TIME_CHECK_END(__debug_sw.getTime());
                 return 2;
             }
             break;
@@ -513,7 +726,7 @@ int CDstar::computeShortestPath()
             updateVertex(point);
         }
     }
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
     return 0;
 }
 
@@ -530,15 +743,15 @@ int CDstar::computeShortestPath()
  */
 bool CDstar::checkValueClose(double value1, double value2)
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
     
     if (isinf(value1) && isinf(value2))
     {
-        TIME_CHECK_END(__debug_sw.getTime());
+        // TIME_CHECK_END(__debug_sw.getTime());
         return true;
     }
 
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
     return (fabs(value1 - value2) < 0.00001);
 }
 
@@ -549,7 +762,7 @@ bool CDstar::checkValueClose(double value1, double value2)
  */
 void CDstar::updateVertex(state point)
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
 
     list<state> neighborPoint;
     list<state>::iterator iter;
@@ -578,7 +791,7 @@ void CDstar::updateVertex(state point)
         insert(point);
     }
     
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
 }
 
 /**
@@ -588,7 +801,7 @@ void CDstar::updateVertex(state point)
  */
 void CDstar::insert(state point)
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
 
     ds_oh::iterator cur;
     float csum;
@@ -600,7 +813,7 @@ void CDstar::insert(state point)
     openHash[point] = csum;
     openList.push(point);
     
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
 }
 
 /**
@@ -612,12 +825,12 @@ void CDstar::insert(state point)
  */
 double CDstar::euclideanCost(state point1, state point2)
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
 
     float x = point1.x - point2.x;
     float y = point1.y - point2.y;
     
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
     return sqrt(x * x + y * y);
 }
 
@@ -641,14 +854,14 @@ double CDstar::heuristic(state point1, state point2)
  */
 state CDstar::calculateKey(state point)
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
 
     double val = fmin(getRhs(point), getG(point));
 
     point.k.first = val + heuristic(point, dstarData_.startPoint) + dstarData_.k_m;
     point.k.second = val;
 
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
     return point;
 }
 
@@ -662,7 +875,7 @@ state CDstar::calculateKey(state point)
  */
 double CDstar::cost(state point1, state point2)
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
     
     int distanceX = fabs(point1.x - point2.x);
     int distanceY = fabs(point1.y - point2.y);
@@ -673,16 +886,16 @@ double CDstar::cost(state point1, state point2)
 
     if (cellHash.count(point1) == 0)
     {
-        TIME_CHECK_END(__debug_sw.getTime());
+        // TIME_CHECK_END(__debug_sw.getTime());
         return scale * dstarData_.unknownCellCost;
     }
     
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
     return scale * cellHash[point1].cost;
 }
 void CDstar::updatePoint(std::list <tDstarWallPoint> &set)
 {
-    CPthreadLockGuard lock(mutexDstarCore);
+    // CPthreadLockGuard lock(mutexDstarCore);
     clearWall();
     // ceblog(LOG_LV_SYSDEBUG, BOLDYELLOW, "locked");
     for(auto it : set){
@@ -700,7 +913,7 @@ void CDstar::updatePoint(std::list <tDstarWallPoint> &set)
  */
 void CDstar::updatePoint(int pointX, int pointY, double costValue)
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
     
     state point;
 
@@ -714,14 +927,14 @@ void CDstar::updatePoint(int pointX, int pointY, double costValue)
         // {
         //     ceblog(LOG_LV_NECESSARY,BOLDYELLOW, " 로봇이 벽 안에 있어요.");
         // }
-        TIME_CHECK_END(__debug_sw.getTime());
+        // TIME_CHECK_END(__debug_sw.getTime());
         return;
     }
 #endif
 
     if(point == dstarData_.goalPoint)
     {
-        TIME_CHECK_END(__debug_sw.getTime());
+        // TIME_CHECK_END(__debug_sw.getTime());
         return;
     }
 
@@ -732,7 +945,7 @@ void CDstar::updatePoint(int pointX, int pointY, double costValue)
     }
     updateVertex(point);
     
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
 }
 
 
@@ -748,7 +961,7 @@ void CDstar::updatePoint(int pointX, int pointY, double costValue)
 void CDstar::updateGoal(tPoint goalPoint) 
 {
     // ceblog(LOG_LV_NECESSARY, BOLDGREEN, "called");
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
     list<tDstarWallPoint> toAdd;
     tDstarWallPoint tp;
 
@@ -756,7 +969,7 @@ void CDstar::updateGoal(tPoint goalPoint)
     list<tDstarWallPoint>::iterator kk;
 
     tCellPoint goal;    // 목표 셀 좌표
-    utils::coordination::convertCoord2CellCoord(goalPoint.x, goalPoint.y, &goal.x, &goal.y);
+    convertCoord2CellCoord(goalPoint.x, goalPoint.y, &goal.x, &goal.y);
 
     dstarData_.goalPoint.x  = (int)(goal.x/MAP_DOWNSCALE_VALUE);
     dstarData_.goalPoint.y  = (int)(goal.y/MAP_DOWNSCALE_VALUE);
@@ -798,7 +1011,7 @@ void CDstar::updateGoal(tPoint goalPoint)
 
     
 
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
 }
 
 /**
@@ -811,25 +1024,25 @@ void CDstar::updateGoal(tPoint goalPoint)
  */
 bool CDstar::isXYclose(double x, double y) 
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
     
     if (isinf(x) && isinf(y))
     {
-        TIME_CHECK_END(__debug_sw.getTime());
+        // TIME_CHECK_END(__debug_sw.getTime());
         return true;
     }
     
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
     return (fabs(x-y) < 0.00001);
 }
 
 bool CDstar::isWall(tPoint point)
 {
-    CPthreadLockGuard lock(mutexDstarCore);
-    ceblog(LOG_LV_SYSDEBUG, BOLDYELLOW, "locked");
+    // CPthreadLockGuard lock(mutexDstarCore);
+    // ceblog(LOG_LV_SYSDEBUG, BOLDYELLOW, "locked");
 
     state statePoint;
-    utils::coordination::convertCoord2CellCoord(point.x, point.y, &statePoint.x, &statePoint.y);
+    convertCoord2CellCoord(point.x, point.y, &statePoint.x, &statePoint.y);
     statePoint.x  = (int)(statePoint.x/MAP_DOWNSCALE_VALUE);
     statePoint.y  = (int)(statePoint.y/MAP_DOWNSCALE_VALUE);
 
@@ -837,26 +1050,26 @@ bool CDstar::isWall(tPoint point)
     bool bWall = checkOccupied(statePoint);
     if(bWall)
     {
-        ceblog(LOG_LV_NECESSARY, BOLDBLACK, "확인할 좌표("<<point.x<<", "<<point.y<<" )\t"<<BOLDRED<<"벽입니다.");
+        // ceblog(LOG_LV_NECESSARY, BOLDBLACK, "확인할 좌표("<<point.x<<", "<<point.y<<" )\t"<<BOLDRED<<"벽입니다.");
     }
     else
     {
-        ceblog(LOG_LV_NECESSARY, BOLDBLACK, "확인할 좌표("<<point.x<<", "<<point.y<<" )\t 벽이 아닙니다.");
+        // ceblog(LOG_LV_NECESSARY, BOLDBLACK, "확인할 좌표("<<point.x<<", "<<point.y<<" )\t 벽이 아닙니다.");
     }
 #endif
-    ceblog(LOG_LV_SYSDEBUG, BOLDGREEN, "lock free");
+    // ceblog(LOG_LV_SYSDEBUG, BOLDGREEN, "lock free");
     return checkOccupied(statePoint) ? true : false;
 }
 
 bool CDstar::isSameDstarPoint(tPoint point1, tPoint point2)
 {
     state statePoint1;
-    utils::coordination::convertCoord2CellCoord(point1.x, point1.y, &statePoint1.x, &statePoint1.y);
+    convertCoord2CellCoord(point1.x, point1.y, &statePoint1.x, &statePoint1.y);
     statePoint1.x  = (int)(statePoint1.x/MAP_DOWNSCALE_VALUE);
     statePoint1.y  = (int)(statePoint1.y/MAP_DOWNSCALE_VALUE);
 
     state statePoint2;
-    utils::coordination::convertCoord2CellCoord(point2.x, point2.y, &statePoint2.x, &statePoint2.y);
+    convertCoord2CellCoord(point2.x, point2.y, &statePoint2.x, &statePoint2.y);
     statePoint2.x  = (int)(statePoint2.x/MAP_DOWNSCALE_VALUE);
     statePoint2.y  = (int)(statePoint2.y/MAP_DOWNSCALE_VALUE);
 
@@ -866,7 +1079,7 @@ bool CDstar::isSameDstarPoint(tPoint point1, tPoint point2)
 void CDstar::updateDstarWallPoint(tPoint wallPoint)
 {    
     tDstarWallPoint pt;
-    utils::coordination::convertCoord2CellCoord(wallPoint.x, wallPoint.y, &pt.x, &pt.y);
+    convertCoord2CellCoord(wallPoint.x, wallPoint.y, &pt.x, &pt.y);
     pt.costValue = -1; 
     std::list <tDstarWallPoint> temp;
 
@@ -887,21 +1100,21 @@ void CDstar::updateDstarWallBumper(tPose robotPose, bool left, bool right)
     tPoint wallPoint;
     if(left && right)
     {
-        ceblog(LOG_LV_NECESSARY, BOLDBLACK, "범퍼 데이터 dstar 벽 업데이트하겠습니다. ("<<BOLDRED<<"가운데"<<BOLDBLACK<<")");
+        // ceblog(LOG_LV_NECESSARY, BOLDBLACK, "범퍼 데이터 dstar 벽 업데이트하겠습니다. ("<<BOLDRED<<"가운데"<<BOLDBLACK<<")");
         wallPoint.x = robotPose.x + centerToBumper*std::cos(robotPose.angle);
         wallPoint.y = robotPose.y + centerToBumper*std::sin(robotPose.angle);
         updateDstarWallPoint(wallPoint);
     }
     else if(left)
     {
-        ceblog(LOG_LV_NECESSARY, BOLDBLACK, "범퍼 데이터 dstar 벽 업데이트하겠습니다. ("<<BOLDYELLOW<<"왼쪽"<<BOLDBLACK<<")");
+        // ceblog(LOG_LV_NECESSARY, BOLDBLACK, "범퍼 데이터 dstar 벽 업데이트하겠습니다. ("<<BOLDYELLOW<<"왼쪽"<<BOLDBLACK<<")");
         wallPoint.x = robotPose.x + centerToBumper*std::cos(robotPose.angle) - centerToSide*std::sin(robotPose.angle);
         wallPoint.y = robotPose.y + centerToBumper*std::sin(robotPose.angle) + centerToSide*std::cos(robotPose.angle);
         updateDstarWallPoint(wallPoint);
     }
     else if(right)
     {
-        ceblog(LOG_LV_NECESSARY, BOLDBLACK, "범퍼 데이터 dstar 벽 업데이트하겠습니다. ("<<BOLDYELLOW<<"오른쪽"<<BOLDBLACK<<")");
+        // ceblog(LOG_LV_NECESSARY, BOLDBLACK, "범퍼 데이터 dstar 벽 업데이트하겠습니다. ("<<BOLDYELLOW<<"오른쪽"<<BOLDBLACK<<")");
         wallPoint.x = robotPose.x + centerToBumper*std::cos(robotPose.angle) + centerToSide*std::sin(robotPose.angle);
         wallPoint.y = robotPose.y + centerToBumper*std::sin(robotPose.angle) - centerToSide*std::cos(robotPose.angle);
         updateDstarWallPoint(wallPoint);
@@ -919,27 +1132,27 @@ bool CDstar::isUpdateObstacleWall()
  */
 void CDstar::clearObstacleWall()
 {
-    ceblog(LOG_LV_NECESSARY, RED, "called");
-    CPthreadLockGuard lock(mutexObstacleWall);
+    // ceblog(LOG_LV_NECESSARY, RED, "called");
+    // CPthreadLockGuard lock(mutexObstacleWall);
     obstacleWall.clear();
 }
 
 void CDstar::setObstacleWall(std::list <tDstarWallPoint> &set)
 {
-    ceblog(LOG_LV_NECESSARY, YELLOW, " : " << set.size() <<" 개");
-    CPthreadLockGuard lock(mutexObstacleWall);
+    // ceblog(LOG_LV_NECESSARY, YELLOW, " : " << set.size() <<" 개");
+    // CPthreadLockGuard lock(mutexObstacleWall);
     for (const auto& element : set) {
         // ceblog(LOG_LV_NECESSARY, BOLDBLACK, "push 전");
         obstacleWall.push_back(element);
         // ceblog(LOG_LV_NECESSARY, BOLDGREEN, "push 후");
     }
     bObstacleWallUpdate = true;
-    ceblog(LOG_LV_NECESSARY, YELLOW, "end..");
+    // ceblog(LOG_LV_NECESSARY, YELLOW, "end..");
 }
 
 std::list <tDstarWallPoint> CDstar::useObstacleWall()
 {
-    CPthreadLockGuard lock(mutexObstacleWall);
+    // CPthreadLockGuard lock(mutexObstacleWall);
     std::list <tDstarWallPoint> ret;
     for (const auto& element : obstacleWall) {
         ret.push_back(element);
@@ -956,7 +1169,7 @@ void CDstar::updateObstacleWall()
 
 std::list <tDstarWallPoint> CDstar::useGridMapWall()
 {
-    CPthreadLockGuard lock(mutexGridMapWall);
+    // CPthreadLockGuard lock(mutexGridMapWall);
     std::list <tDstarWallPoint> ret;
     for (const auto& element : gridMapWall) {
         ret.push_back(element);
@@ -1020,25 +1233,85 @@ bool CDstar::isUpdateGridMapWall()
     return bUpdatedGridMapWall;
 }
 
-Mat CDstar::where(const Mat &condition, const Mat &x, const Mat &y)
+void CDstar::getNeighbours8(int n_array[], int position, int map_width)
 {
-    // Ensure the matrices have the same size and type
-    if (condition.size() != x.size() || condition.size() != y.size() || condition.type() != CV_8UC1)
-    {
-        throw std::invalid_argument("Input matrices must have the same size and condition must be of type CV_8UC1.");
-    }
-
-    // Create an output matrix with the same size and type as x and y
-    Mat result = Mat::zeros(x.size(), x.type());
-
-    // Use the condition mask to copy elements from x or y
-    x.copyTo(result, condition);  // Copy elements from x where condition is true
-    y.copyTo(result, ~condition); // Copy elements from y where condition is false
-
-    return result;
+    n_array[0] = position - map_width - 1;
+    n_array[1] = position - map_width;
+    n_array[2] = position - map_width + 1;
+    n_array[3] = position - 1;
+    n_array[4] = position + 1;
+    n_array[5] = position + map_width - 1;
+    n_array[6] = position + map_width;
+    n_array[7] = position + map_width + 1;
 }
 
-void CDstar::makeWallListFromGridMap(tPose robotPose, tGridmapInfo mapInfo, u8 *pGridmap)
+bool CDstar::isValid(int x, int y, int rows, int cols)
+{
+    return (x >= 0 && x < rows && y >= 0 && y < cols);
+}
+
+/*
+    Because of the changed map, the robot can be placed in walls,
+    even the robot is actually not in there.
+    It causes the failure of the path planning.
+    To overcome this problem, this function makes a new position,
+    especially the nearest valid position within GRAY_LV_KNOWN_AREA.
+*/
+bool CDstar::getNearestValidPosition(int newPosition[], int robotCellX, int robotCellY, tGridmapInfo mapInfo, u8 *pGridmap)
+{
+    // Check the robot is in the invalid position
+    int N_S = 8;
+    int adj_vector[N_S];
+    int index = robotCellX + robotCellY * mapInfo.width;
+    getNeighbours8(adj_vector, index, mapInfo.width);
+    for (int i = 0; i < N_S; i++)
+    {
+        if (pGridmap[adj_vector[i]] == GRAY_LV_KNOWN_AREA)
+            return false;
+    }
+
+    // In case the robot is in the invalid position
+    // Using breadth-first search (BFS)
+    queue<pair<int, int>> q;
+    set<pair<int, int>> visited;
+    q.push({robotCellX, robotCellY});
+    visited.insert({robotCellX, robotCellY});
+
+    // Define possible directions (up, down, left, right, and diagonals)
+    vector<pair<int, int>> directions = {
+        {-1, 0}, {1, 0}, {0, -1}, {0, 1}, {-1, -1}, {-1, 1}, {1, -1}, {1, 1}};
+
+    int maxSeekSize = 100;
+
+    // Perform BFS
+    while (!q.empty() && q.size() < maxSeekSize)
+    {
+        auto [cx, cy] = q.front();
+        q.pop();
+
+        for (auto &dir : directions)
+        {
+            int nx = cx + dir.first;
+            int ny = cy + dir.second;
+
+            if (isValid(nx, ny, mapInfo.width, mapInfo.height) && !visited.count({nx, ny}))
+            {
+                if (pGridmap[nx + ny * mapInfo.width] == GRAY_LV_KNOWN_AREA)
+                {
+                    newPosition[0] = nx;
+                    newPosition[1] = ny;
+                    return true;
+                }
+                q.push({nx, ny});
+                visited.insert({nx, ny});
+            }
+        }
+    }
+
+    return false;
+}
+
+std::list<tPoint> CDstar::makeWallListFromGridMap(tPose robotPose, tGridmapInfo mapInfo, unsigned char *pGridmap)
 {
     dstarCellInfo = mapInfo;
     auto ox = 0, oy = 0, cellIdx = 0;
@@ -1048,22 +1321,47 @@ void CDstar::makeWallListFromGridMap(tPose robotPose, tGridmapInfo mapInfo, u8 *
     int robotCellX = 0, robotCellY = 0;
     tPoint robotAroundPoint; // 로봇 주변의 좌표 단위(m, m)
     int index = 0;
+    int N_S = 8;
+    std::array<double, mapInfo.width * mapInfo.height> costArray;
+    costArray.fill(0.0);
+    float costDecay = 0.5, costThres = -0.1;
 
-    // utils::coordination::convertCoordi2Index(robotPose.x, robotPose.y, 
-    //     &robotCellX, &robotCellY, mapInfo.resolution, mapInfo.width, mapInfo.height);
-    robotCellX = int((robotPose.x-mapInfo.origin_x)/mapInfo.resolution);
-    robotCellY = int((robotPose.y-mapInfo.origin_y)/mapInfo.resolution);
-    const int updateRangeSize = 40;    
-    for ( int j=robotCellY-updateRangeSize; j<robotCellY+updateRangeSize; j++ )
+    convertCoordi2Index(robotPose.x, robotPose.y,
+                        &robotCellX, &robotCellY, mapInfo.resolution, mapInfo.width, mapInfo.height);
+    robotCellX = int((robotPose.x - mapInfo.origin_x) / mapInfo.resolution);
+    robotCellY = int((robotPose.y - mapInfo.origin_y) / mapInfo.resolution);
+
+    int new_position[2];
+    bool needReposition = getNearestValidPosition(
+        new_position,
+        robotCellX,
+        robotCellY,
+        mapInfo, pGridmap);
+
+    if (needReposition)
     {
-        for ( int i=robotCellX-updateRangeSize; i<robotCellX+updateRangeSize; i++ )
+        robotCellX = new_position[0];
+        robotCellY = new_position[1];
+    }
+
+    const int updateRangeSize = 1000;    
+    int y_min = 0, y_max = mapInfo.height, x_min = 0, x_max = mapInfo.width;
+    y_min = max(y_min, robotCellY-updateRangeSize);
+    y_max = min(robotCellY+updateRangeSize, y_max);
+    x_min = max(x_min, robotCellX-updateRangeSize);
+    x_max = min(robotCellX+updateRangeSize, x_max);
+    // for ( int j=robotCellY-updateRangeSize; j<robotCellY+updateRangeSize; j++ )
+    for ( int j=y_min; j<y_max; j++ )
+    {
+        // for ( int i=robotCellX-updateRangeSize; i<robotCellX+updateRangeSize; i++ )
+        for ( int i=x_min; i<x_max; i++ )
         {
             index = i+j*mapInfo.width;
             if ( index >= 0 && index < mapInfo.width*mapInfo.height )
             {
                 robotAroundPoint.x = (int(index%mapInfo.width)) * mapInfo.resolution + mapInfo.origin_x;
                 robotAroundPoint.y = (int(index/mapInfo.width)) * mapInfo.resolution + mapInfo.origin_y;
-                utils::coordination::convertCoord2CellCoord(
+                convertCoord2CellCoord(
                     robotAroundPoint.x, robotAroundPoint.y, &ox, &oy);
                 add.x = ox;
                 add.y = oy;
@@ -1071,20 +1369,37 @@ void CDstar::makeWallListFromGridMap(tPose robotPose, tGridmapInfo mapInfo, u8 *
                 if ( pGridmap[index] == GRAY_LV_KNOWN_WALL ||
                     pGridmap[index] == GRAY_LV_UNKNOWN_AREA){
                     debugWallData.emplace_back(robotAroundPoint);
-                    add.costValue = -1;                    
+                    add.costValue = -1;
+                    costArray[index] = -1;
                 }
                 else{
-                    add.costValue = 1;                    
+                    int adj_vector[N_S];
+                    getNeighbours8(adj_vector, index, mapInfo.width);
+                    double minCost = 0.0;
+                    for (int i = 0; i < N_S; i++)
+                    {
+                        double tempCost = costArray[adj_vector[i]];
+                        if (tempCost < costThres)
+                            if (minCost > tempCost)
+                                minCost = tempCost;
+                    }
+                    if (minCost < 0.0)
+                    {
+                        add.costValue = minCost * costDecay;
+                        costArray[index] = minCost * costDecay;
+                    }
+                    else
+                    {
+                        add.costValue = 1;
+                        costArray[index] = 1;
+                    }
                 }
 
                 wall.emplace_back(add);
             }
         }
     }
-
-    
-
-    DEBUG_PUB.publishCostMap(robotPose, debugWallData);
+    // DEBUG_PUB.publishCostMap(robotPose, debugWallData);
 
     // 정말 업데이트 해야 하나 ?
 #if 0 // 검증 중.
@@ -1097,7 +1412,7 @@ void CDstar::makeWallListFromGridMap(tPose robotPose, tGridmapInfo mapInfo, u8 *
         }
     }
 #endif
-    CPthreadLockGuard lock(mutexGridMapWall);
+    // CPthreadLockGuard lock(mutexGridMapWall);
     gridMapWall.clear();
     for (const auto &element : wall)
     {
@@ -1106,7 +1421,13 @@ void CDstar::makeWallListFromGridMap(tPose robotPose, tGridmapInfo mapInfo, u8 *
     }
 
     tCellPoint start;   // 시작 셀 좌표
-    utils::coordination::convertCoord2CellCoord(robotPose.x, robotPose.y, &start.x, &start.y);
+    if (needReposition)
+    {
+        start.x = robotCellX;
+        start.y = robotCellY;
+    }
+    else
+        convertCoord2CellCoord(robotPose.x, robotPose.y, &start.x, &start.y);
 
     dstarData_.startPoint.x = (int)(start.x/MAP_DOWNSCALE_VALUE);
     dstarData_.startPoint.y = (int)(start.y/MAP_DOWNSCALE_VALUE);
@@ -1116,64 +1437,15 @@ void CDstar::makeWallListFromGridMap(tPose robotPose, tGridmapInfo mapInfo, u8 *
 
     dstarData_.startPoint = calculateKey(dstarData_.startPoint);
     dstarData_.s_last  = dstarData_.startPoint;
+
+    return debugWallData;
 }
 
-/**
- * @brief 단순화 맵 복사 함수.
- * @param dest 
- * @param pInfo 
- * @return true 
- * @return false 
- */
-bool CDstar::copyDstarGridMap(u8 *& dest, tGridmapInfo *pInfo)
-{
-    bool ret = false;
-    if (dstarCellInfo.height == 0 || dstarCellInfo.width == 0 || dstarCellInfo.resolution == 0.0)
-    {
-        // ceblog(LOG_LV_ERROR, RED, " width : " << simplifyInfo.width << " height  : " << simplifyInfo.height << " resolution : " << simplifyInfo.resolution);/* don't copy! */
-        // ceblog(LOG_LV_ERROR, RED, "gridmap copy error!!!! ");/* don't copy! */
-    }
-    else
-    {
-        *pInfo = dstarCellInfo;
-        int size = pInfo->width * pInfo->height;        
-        if (dest != nullptr)
-        {
-            delete[] dest;
-        }
-
-        dest = new u8[size];
-        //reset Map : FREE_SPACE
-        memset(dest, 0, size * sizeof(u8));
-
-        tPoint wallPoint;
-        int wallIndex;
-        CPthreadLockGuard lock(mutexDstarCore);
-        // ceblog(LOG_LV_NECESSARY, BOLDYELLOW, "locked");
-        for (const auto& entry : cellHash) 
-        {
-            if(entry.second.cost == -1)
-            {
-                wallPoint.x = (double)
-                    (entry.first.x * MAP_DOWNSCALE_VALUE + (int)(MAP_DOWNSCALE_VALUE/2.0)) * CELL_RESOLUTUION + 
-                    CELL_RESOLUTUION * (double)((CELL_X / 2) * -1);
-                
-                wallPoint.y = (double)(entry.first.y*MAP_DOWNSCALE_VALUE+(int)(MAP_DOWNSCALE_VALUE/2.0))*CELL_RESOLUTUION + CELL_RESOLUTUION*(double)((CELL_X / 2) * -1);
-                wallIndex = int((wallPoint.x - pInfo->origin_x) / pInfo->resolution) + int((wallPoint.y - pInfo->origin_y) / pInfo->resolution) * pInfo->width;
-                if (wallIndex > 0 && wallIndex < size)
-                    dest[wallIndex] = 254;
-            }
-        }
-        ret = true;
-    }
-    // ceblog(LOG_LV_NECESSARY, BOLDGREEN, "lock free");
-    return ret;
-}
 
 
 void CDstar::clearWall()
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
     
     
     
@@ -1190,7 +1462,7 @@ void CDstar::clearWall()
     tmp.cost = dstarData_.unknownCellCost;
     cellHash[dstarData_.startPoint] = tmp;
     
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
 }
 
 /**
@@ -1201,14 +1473,14 @@ void CDstar::clearWall()
  */
 void CDstar::getNextState(state point, list<state> &nextPoint)
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
     nextPoint.clear();
     point.k.first = -1;
     point.k.second = -1;
 
     if (checkOccupied(point))
     {
-        TIME_CHECK_END(__debug_sw.getTime());
+        // TIME_CHECK_END(__debug_sw.getTime());
         return;
     }
 
@@ -1229,7 +1501,7 @@ void CDstar::getNextState(state point, list<state> &nextPoint)
     point.x += 1;
     nextPoint.push_front(point);
     
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
 }
 
 /**
@@ -1240,7 +1512,7 @@ void CDstar::getNextState(state point, list<state> &nextPoint)
  */
 void CDstar::getPerviousState(state point, list<state> &perviousPoint)
 {
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
 
     perviousPoint.clear();
     point.k.first = -1;
@@ -1271,7 +1543,7 @@ void CDstar::getPerviousState(state point, list<state> &perviousPoint)
     if (!checkOccupied(point))
         perviousPoint.push_front(point);
     
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
 }
 
 /**
@@ -1283,7 +1555,7 @@ void CDstar::getPerviousState(state point, list<state> &perviousPoint)
 bool CDstar::replan()
 {
     // ceblog(LOG_LV_NECESSARY, BOLDGREEN, "called");
-    CStopWatch __debug_sw;
+    // CStopWatch __debug_sw;
     shortestPath.clear();
 
     int pathExistence = computeShortestPath();
@@ -1292,7 +1564,7 @@ bool CDstar::replan()
     // 목적지까지 경로가 존재 여부 판단.
     if (pathExistence < 0 || goalInfinite)
     { 
-        TIME_CHECK_END(__debug_sw.getTime());
+        // TIME_CHECK_END(__debug_sw.getTime());
         return false;
     }
 
@@ -1309,9 +1581,9 @@ bool CDstar::replan()
 
         if (n.empty())
         {
-            eblog(LOG_LV, "replan false n.empty()\n");
+            // eblog(LOG_LV, "replan false n.empty()\n");
             
-            TIME_CHECK_END(__debug_sw.getTime());
+            // TIME_CHECK_END(__debug_sw.getTime());
             return false;
         }
 
@@ -1350,7 +1622,7 @@ bool CDstar::replan()
 
     // ceblog(LOG_LV_NECESSARY, YELLOW, "replan 성공!");
     //ceblog(LOG_LV_PATHPLAN, BOLDGREEN, "lock free");
-    TIME_CHECK_END(__debug_sw.getTime());
+    // TIME_CHECK_END(__debug_sw.getTime());
     return true;
 }
 
@@ -1361,76 +1633,69 @@ bool CDstar::isRunFindNearestPath()
 }
 
 
-void CDstar::findNearestPath(tPose robotPose, std::list<tPoint> searchingPoints, 
-    int searchingCnt)
+void CDstar::findNearestPath(tPoint start, tPoint goal)
 {
     dstarData_.isRunFindNearestPath = true;
-    ceblog(LOG_LV_NECESSARY, BOLDMAGENTA, "경로계획을 시작합니다.");
-    CPthreadLockGuard lock(mutexDstarCore);
-    ceblog(LOG_LV_SYSDEBUG, BOLDYELLOW, "locked");    
-    int checkCnt = 0;
+    // ceblog(LOG_LV_NECESSARY, BOLDMAGENTA, "경로계획을 시작합니다.");
+    // CPthreadLockGuard lock(mutexDstarCore);
+    // ceblog(LOG_LV_SYSDEBUG, BOLDYELLOW, "locked");    
+    
     double minDis = 999, currentdis = 0;
     std::list<tPoint> rawPath;
     std::list<tPoint> selectedPath;
     std::list<tPoint> smoothShortPath;
     std::list<tPoint> RDPShortPath;
-    tPose prePose = robotPose;
-    tPoint currentSearchingPoint;
-    tPoint nearestGoalPoint;
-    // update goal, start
-    if(searchingPoints.size() > 0)        
-    {
-        nearestGoalPoint = searchingPoints.front();
-    }
+    tPoint prePose = start;    
+    bool isGetPath = false;
+    
+    
 
-    while (searchingPoints.size() > 0 )
+    // while (searchingPoints.size() > 0 )
     {
         // ceblog(LOG_LV_NECESSARY, BOLDBLACK, "Searching Points : "<<
         //     BOLDYELLOW<<searchingPoints.size()<<BOLDBLACK<<"개 입니다.");
-        currentSearchingPoint = searchingPoints.front();
-        updateGoal(currentSearchingPoint);
-        searchingPoints.pop_front();
-
-
+        updateGoal(goal);
         if(replan() == true)    // replan 성공
         {
-            checkCnt++;
             rawPath.clear();
-            getPath(rawPath, currentSearchingPoint);
+            getPath(rawPath, goal);
 
-            // 최단거리 목적지 뽑는 기능
-            prePose = robotPose;
-            currentdis=0;
-            if(rawPath.size() >= 2)
-            {
-                for(tPoint path : rawPath)
-                {
-                    currentdis += utils::math::distanceTwoPoint(prePose,path);
-                    prePose = tPose(path.x, path.y, 0);
-                }
-
-                if(currentdis < minDis) //hjkim231107 : 여기서 filter 되면 path가 안나올수 있음..예외 처리 필요
-                {
-                    selectedPath = rawPath;
-                    nearestGoalPoint = currentSearchingPoint;
-                    minDis = currentdis;
-                }
-            }
-            else
-            {
-                selectedPath = rawPath;
-                nearestGoalPoint = currentSearchingPoint;
-            }
-
-            if(checkCnt >= searchingCnt)
-            {
-                break;
-            }
+            selectedPath = rawPath;
+            isGetPath = true; 
         }
+        // if(replan() == true)    // replan 성공
+        // {            
+        //     rawPath.clear();
+        //     getPath(rawPath, goal);
+
+        //     // 최단거리 목적지 뽑는 기능
+        //     prePose = start;
+        //     currentdis=0;
+        //     if(rawPath.size() >= 2)
+        //     {
+        //         for(tPoint path : rawPath)
+        //         {
+        //             currentdis += distanceTwoPoint(prePose, path);
+        //             prePose = path;
+        //         }
+
+        //         if(currentdis < minDis) //hjkim231107 : 여기서 filter 되면 path가 안나올수 있음..예외 처리 필요
+        //         {
+        //             selectedPath = rawPath;
+        //             minDis = currentdis;
+        //         }
+        //     }
+        //     else
+        //     {
+        //         selectedPath = rawPath;
+        //     }
+
+        //     isGetPath = true;            
+        // }
     }
         
     // 하나라도 경로계획이 성공했는지 체크
-    if(checkCnt != 0)
+    if(isGetPath == true)
     {
 #if 0        
         ceblog(LOG_LV_NECESSARY, BOLDBLUE, " ################ 튜닝 전 ################# ");
@@ -1441,10 +1706,10 @@ void CDstar::findNearestPath(tPose robotPose, std::list<tPoint> searchingPoints,
         ceblog(LOG_LV_NECESSARY, BOLDBLUE, " ################################################### " );
 #endif
         // smoothShortPath = makeSmoothPath(selectedPath);
-        utils::path::ramerDouglasPeucker(selectedPath, 0.1, RDPShortPath);
-        if(utils::math::distanceTwoPoint(RDPShortPath.front(), robotPose) < (EXPLORE_GOAL_MARGIN/0.8) )    
+        ramerDouglasPeucker(selectedPath, 0.1, RDPShortPath);
+        if(distanceTwoPoint(RDPShortPath.front(), start) < (EXPLORE_GOAL_MARGIN/0.8) )    
         {
-            ceblog(LOG_LV_NECESSARY, BOLDYELLOW, " 로봇과 경로가 근처라서 제거. 거리마진 ("<<(EXPLORE_GOAL_MARGIN/0.8)<<")");
+            // ceblog(LOG_LV_NECESSARY, BOLDYELLOW, " 로봇과 경로가 근처라서 제거. 거리마진 ("<<(EXPLORE_GOAL_MARGIN/0.8)<<")");
             if(RDPShortPath.size()>1)
             {
                 RDPShortPath.pop_front();
@@ -1465,20 +1730,20 @@ void CDstar::findNearestPath(tPose robotPose, std::list<tPoint> searchingPoints,
     else
     {
         setFindNearSuccess(false);
-        ceblog(LOG_LV_NECESSARY, BOLDYELLOW, " 경로 계획 실패 - 경로가 나온 목적지가 없음. " );
+        // ceblog(LOG_LV_NECESSARY, BOLDYELLOW, " 경로 계획 실패 - 경로가 나온 목적지가 없음. " );
     }      
     
-    ceblog(LOG_LV_NECESSARY, BOLDMAGENTA, "경로계획을 종료합니다.");
-    ceblog(LOG_LV_SYSDEBUG, BOLDGREEN, "lock free");
+    // ceblog(LOG_LV_NECESSARY, BOLDMAGENTA, "경로계획을 종료합니다.");
+    // ceblog(LOG_LV_SYSDEBUG, BOLDGREEN, "lock free");
     dstarData_.isRunFindNearestPath = false;
 }
 
 std::list<tPoint> CDstar::makeSmoothPath(std::list<tPoint> rawPath)
 {
-    ceblog(LOG_LV_NECESSARY, BOLDGREEN, " ############### --- 경로를 부드럽게 만들기 시작합니다. --- ###############  ");
+    // ceblog(LOG_LV_NECESSARY, BOLDGREEN, " ############### --- 경로를 부드럽게 만들기 시작합니다. --- ###############  ");
     if(rawPath.size() <= 2)
     {
-        ceblog(LOG_LV_NECESSARY, GREEN, "경로가 3개 이하 - 부드럽게 하기 종료");
+        // ceblog(LOG_LV_NECESSARY, GREEN, "경로가 3개 이하 - 부드럽게 하기 종료");
         return rawPath;
     }
     std::list<tPoint> copyRawPath;
@@ -1502,21 +1767,21 @@ std::list<tPoint> CDstar::makeSmoothPath(std::list<tPoint> rawPath)
 
     for(tPoint shortPathPoint : copyRawPath)
     {
-        ceblog(LOG_LV_NECESSARY, GREEN, " 경로를 수정할 필요가 있습니다. 검사한 경로 : " << prePoint.x << " , " << prePoint.y);
+        // ceblog(LOG_LV_NECESSARY, GREEN, " 경로를 수정할 필요가 있습니다. 검사한 경로 : " << prePoint.x << " , " << prePoint.y);
         neighbors =getNeighboringCoordinates8(prePoint, farSize);
 
-        ceblog(LOG_LV_NECESSARY, GREEN, " **************** 첫번 째 포인트 ****************");
+        // ceblog(LOG_LV_NECESSARY, GREEN, " **************** 첫번 째 포인트 ****************");
         sortedFirstPoint =sortCoordinatesByDistance(prePoint, prePrePoint, neighbors);
-        ceblog(LOG_LV_NECESSARY, GREEN, " **************** 두번 째 포인트 ****************");
+        // ceblog(LOG_LV_NECESSARY, GREEN, " **************** 두번 째 포인트 ****************");
         sortedSecondPoint =sortCoordinatesByDistance(prePoint, shortPathPoint, neighbors);
 
-        ceblog(LOG_LV_NECESSARY, BOLDGREEN, " 변경 전 좌표 : " << prePoint.x << " , " << prePoint.y);
+        // ceblog(LOG_LV_NECESSARY, BOLDGREEN, " 변경 전 좌표 : " << prePoint.x << " , " << prePoint.y);
         for( tPoint farthestPoint : findFarthestPoints(sortedFirstPoint,sortedSecondPoint))
         {
-            ceblog(LOG_LV_NECESSARY, BOLDGREEN, " 변경 후  좌표 : " << farthestPoint.x << " , " << farthestPoint.y);
+            // ceblog(LOG_LV_NECESSARY, BOLDGREEN, " 변경 후  좌표 : " << farthestPoint.x << " , " << farthestPoint.y);
             if(farthestPoint.x == smoothPath.front().x &&farthestPoint.y == smoothPath.front().y)
             {
-                ceblog(LOG_LV_NECESSARY, BOLDGREEN, " 이전 좌표와 동일하여 패스.");
+                // ceblog(LOG_LV_NECESSARY, BOLDGREEN, " 이전 좌표와 동일하여 패스.");
             }
             else
             {
@@ -1566,7 +1831,7 @@ std::list<tPoint> CDstar::findFarthestPoints (const std::list<tPoint>& firstPoin
         {
             for (tPoint point2 : secondPoints)
             {
-                double distance = utils::math::distanceTwoPoint(point1, point2);
+                double distance = distanceTwoPoint(point1, point2);
                 if (distance > maxDistance) 
                 {
                     maxDistance = distance;
@@ -1637,7 +1902,7 @@ std::list<tPoint> CDstar::sortCoordinatesByDistance(const tPoint& centerPoint, c
 
     for (const auto& coord : coordinates) 
     {
-        double distance = utils::math::distanceTwoPoint(comparePoint, coord);
+        double distance = distanceTwoPoint(comparePoint, coord);
         if(minDistances > distance)
         {
             nearestPoint = coord;
@@ -1648,7 +1913,7 @@ std::list<tPoint> CDstar::sortCoordinatesByDistance(const tPoint& centerPoint, c
     if(nearestPoint.x == centerPoint.x || nearestPoint.y == centerPoint.y )
     {
         sortedCoordinates.emplace_back(nearestPoint);
-        ceblog(LOG_LV_NECESSARY, BOLDYELLOW,  " 정렬된 좌표 : " << nearestPoint.x << " , " << nearestPoint.y );
+        // ceblog(LOG_LV_NECESSARY, BOLDYELLOW,  " 정렬된 좌표 : " << nearestPoint.x << " , " << nearestPoint.y );
         return sortedCoordinates;
     }
 
@@ -1680,7 +1945,7 @@ std::list<tPoint> CDstar::sortCoordinatesByDistance(const tPoint& centerPoint, c
     sortedCoordinates.emplace_back(secondCenter);
     for (const auto& info : sortedCoordinates) 
     {
-        ceblog(LOG_LV_NECESSARY, BOLDYELLOW,  " 정렬된 좌표 : " << info.x << " , " << info.y );
+        // ceblog(LOG_LV_NECESSARY, BOLDYELLOW,  " 정렬된 좌표 : " << info.x << " , " << info.y );
     }
 
     return sortedCoordinates;
